@@ -1,5 +1,5 @@
-baseline_df = 'TEP_FaultFree_Training.csv'
-df = 'TEP_Faulty_Training.csv'
+baseline_df_file = 'TEP_FaultFree_Training.csv'
+df_file = 'TEP_Faulty_Training.csv'
 
 axes = {
     "faultNumber": "fault_number",

@@ -1,13 +1,16 @@
 import torch
-def get_base_features(axes, data, columns, normal):
+
+def get_base_features(axes, df, normal_col):
+
     baseline_stats = {}
     base_features = {}
 
     timeseries = {
-        col: torch.tensor(data, dtype=torch.float32)
-        for col in columns
+        col: torch.tensor(df[col].to_numpy(), dtype=torch.float32)
+        for col in df.columns
     }
 
+    normal = df[df[normal_col] == 0]
     for signal in axes.values():
         baseline_stats[signal] ={
             'mean': normal[signal].mean(),
@@ -19,3 +22,5 @@ def get_base_features(axes, data, columns, normal):
         sigma = baseline_stats[feature]['std']
         base_features[f'{feature}_high'] = signal > (mu + 2*sigma)
         base_features[f'{feature}_low'] = signal < (mu - 2*sigma)
+
+    return base_features
