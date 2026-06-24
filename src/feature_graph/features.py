@@ -1,14 +1,15 @@
 import torch
 
-def get_base_features(axes, df, normal_col):
+def get_base_features(axes, df, normal_col, timeseries=None):
 
     baseline_stats = {}
     base_features = {}
 
-    timeseries = {
-        col: torch.tensor(df[col].to_numpy(), dtype=torch.float32)
-        for col in df.columns
-    }
+    if not timeseries:
+        timeseries = {
+            col: torch.tensor(df[col].to_numpy(), dtype=torch.float32)
+            for col in df.columns
+        }
 
     normal = df[df[normal_col] == 0]
     for signal in axes.values():
@@ -43,3 +44,31 @@ def get_feature_graph(base_features, operators):
             }
 
     return feature_graph
+
+def get_features_from_state(state, axes, feature_names):
+    x, v, theta, omega = state
+
+    timeseries = {
+        "x": torch.tensor([x], dtype=torch.float32),
+        "v": torch.tensor([v], dtype=torch.float32),
+        "theta": torch.tensor([theta], dtype=torch.float32),
+        "omega": torch.tensor([omega], dtype=torch.float32),
+    }
+
+    base = {}
+    for feature, signal_name in axes.items():
+        signal = timeseries[signal_name]
+        base[f"{feature}_right"] = signal > 0
+        base[f"{feature}_left"] = signal < 0
+
+    graph = {}
+
+    for name, mask in base.items():
+        graph[name] = mask
+
+    x_vec = torch.stack([
+        graph[name].float()
+        for name in feature_names
+    ], dim=1)
+
+    return graph, x_vec

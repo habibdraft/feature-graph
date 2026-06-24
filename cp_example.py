@@ -1,91 +1,15 @@
 import gymnasium as gym
 import pandas as pd
 import torch
+import torch.nn as nn
+import torch.optim as optim
 
+from feature_graph.features import get_base_features, get_feature_graph, get_features_from_state
+from feature_graph.cp_project_constants import get_states, axes, random_action, correct_action
+from feature_graph.operators import start, end, between, operators
+from policy_net.policy_net import PolicyNet
 
-def enter(mask):
-    x = mask.int()
-    return torch.cat([torch.tensor([False]), x.diff() == 1])
-
-
-def exit(mask):
-    x = mask.int()
-    return torch.cat([torch.tensor([False]), x.diff() == -1])
-
-
-def correct_action(state):
-    x, v, theta, omega = state
-    score = theta + 0.5 * omega + 0.05 * x + 0.05 * v
-    return 1 if score > 0 else 0
-
-
-env = gym.make("CartPole-v1")
-
-rows = []
-state, info = env.reset()
-episode = 0
-t_in_episode = 0
-
-while len(rows) < 10_000:
-    action = correct_action(state)
-
-    next_state, reward, terminated, truncated, info = env.step(action)
-
-    x, v, theta, omega = state
-
-    rows.append({
-        "row": len(rows),
-        "episode": episode,
-        "t": t_in_episode,
-        "x": x,
-        "v": v,
-        "theta": theta,
-        "omega": omega,
-        "action": action,
-        "reward": reward,
-        "terminated": terminated,
-        "truncated": truncated,
-        "episode_start": t_in_episode == 0,
-    })
-
-    if terminated or truncated:
-        state, info = env.reset()
-        episode += 1
-        t_in_episode = 0
-    else:
-        state = next_state
-        t_in_episode += 1
-
-env.close()
-
-df = pd.DataFrame(rows)
-
-states = torch.tensor(
-    df[["x", "v", "theta", "omega"]].values,
-    dtype=torch.float32
-)
-
-actions = torch.tensor(df["action"].values, dtype=torch.long)
-
-episode_start = torch.tensor(
-    df["episode_start"].values,
-    dtype=torch.bool
-)
-
-timeseries = {
-    'x': states[:, 0],
-    'v': states[:, 1],
-    'theta': states[:, 2],
-    'omega': states[:, 3],
-    'episode_start': episode_start
-}
-
-axes = {
-    'cart': 'x',
-    'cart_moving': 'v',
-    'pole': 'theta',
-    'pole_rotating': 'omega'
-}
+states, actions, episode_start, timeseries = get_states(correct_action)
 
 base_features = {}
 
@@ -102,16 +26,57 @@ for name, mask in base_features.items():
         'tensor': mask,
     }
 
-    feature_graph[f'enter_{name}'] = {
-        'level': 1,
-        'op': 'enter',
-        'parents': [name],
-        'tensor': enter(mask)
-    }
+feature_names = list(feature_graph.keys())
 
-    feature_graph[f'exit_{name}'] = {
-        'level': 1,
-        'op': 'exit',
-        'parents': [name],
-        'tensor': exit(mask)
-    }
+X = torch.stack([
+    feature_graph[name]["tensor"].float()
+    for name in feature_names
+], dim=1)
+
+y = actions.long()
+
+policy = PolicyNet(X.shape[1])
+
+loss_fn = nn.CrossEntropyLoss()
+optimizer = optim.Adam(policy.parameters(), lr=1e-3)
+
+for epoch in range(200):
+    logits = policy(X)
+    loss = loss_fn(logits, y)
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if epoch % 25 == 0:
+        pred = logits.argmax(dim=1)
+        acc = (pred == y).float().mean()
+        print(epoch, loss.item(), acc.item())
+
+env = gym.make("CartPole-v1")
+
+episode_rewards = []
+
+for ep in range(20):
+    state, info = env.reset()
+    total_reward = 0
+
+    for t in range(500):
+        graph, x_vec = get_features_from_state(state, axes, feature_names)
+
+        with torch.no_grad():
+            logits = policy(x_vec)
+            action = logits.argmax(dim=1).item()
+
+        state, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+
+        if terminated or truncated:
+            break
+
+    episode_rewards.append(total_reward)
+
+env.close()
+
+print("Average reward:", sum(episode_rewards) / len(episode_rewards))
+print("Rewards:", episode_rewards)
